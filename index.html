@@ -45,6 +45,26 @@
     ::-webkit-scrollbar-thumb:hover {
       background: #3f4656;
     }
+    /* 순서 섞기 직전 10초 긴박 알림: 속도(--urgent-speed)와 크기(--urgent-scale)는 JS가 매초 조인다 */
+    .shuffle-alert-box {
+      animation: shuffle-urgent-pulse var(--urgent-speed, 1s) ease-in-out infinite;
+      transition: background-color 0.4s ease, box-shadow 0.4s ease;
+    }
+    .shuffle-alert-box.is-final {
+      animation-name: shuffle-urgent-shake;
+    }
+    @keyframes shuffle-urgent-pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(var(--urgent-scale, 1.05)); }
+    }
+    @keyframes shuffle-urgent-shake {
+      0%, 100% { transform: translateX(0) scale(var(--urgent-scale, 1.2)); }
+      25% { transform: translateX(-7px) scale(var(--urgent-scale, 1.2)); }
+      75% { transform: translateX(7px) scale(var(--urgent-scale, 1.2)); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .shuffle-alert-box { animation: none; }
+    }
   </style>
 </head>
 <body class="min-h-screen flex flex-col selection:bg-indigo-500 selection:text-white">
@@ -54,6 +74,14 @@
     <div class="bg-zinc-900/95 border border-white/15 text-white text-sm font-medium px-5 py-3 rounded-full shadow-2xl backdrop-blur-md flex items-center gap-2">
       <span id="toastDot" class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
       <span id="toastMsg">복사되었습니다.</span>
+    </div>
+  </div>
+
+  <!-- Shuffle Urgent Alert (순서 섞기 직전 10초 동안만 화면 상단에 뜨는 알림) -->
+  <div id="shuffleAlert" class="fixed top-4 inset-x-0 z-50 flex justify-center px-4 pointer-events-none opacity-0 transition-opacity duration-300" aria-hidden="true">
+    <div id="shuffleAlertBox" class="shuffle-alert-box px-5 py-3 rounded-2xl border-2 border-white/40 text-white font-extrabold text-sm sm:text-base flex items-center gap-3">
+      <span id="shuffleAlertMsg">곧 카드 순서가 바뀝니다</span>
+      <span id="shuffleAlertSec" class="font-mono leading-none">10</span>
     </div>
   </div>
 
@@ -2105,9 +2133,46 @@
       }
       const remainSec = Math.max(0, Math.ceil(((slot + 1) * SHUFFLE_INTERVAL_MS - now) / 1000));
       shuffleCountdownEl.textContent = `${Math.floor(remainSec / 60)}:${String(remainSec % 60).padStart(2, "0")}`;
+      updateShuffleUrgency(remainSec);
     }
 
-    setInterval(tickShuffle, 1000);
+    // 마지막 10초 동안 상단 알림을 띄우고, 남은 시간이 줄수록 점점 급박하게 만든다.
+    // (주황 → 빨강, 맥박이 빨라지고 커지며, 마지막 3초는 좌우로 흔들린다)
+    const URGENT_SECONDS = 10;
+    const shuffleAlertEl = document.getElementById("shuffleAlert");
+    const shuffleAlertBox = document.getElementById("shuffleAlertBox");
+    const shuffleAlertMsg = document.getElementById("shuffleAlertMsg");
+    const shuffleAlertSec = document.getElementById("shuffleAlertSec");
+    let lastUrgentSec = null;
+
+    function updateShuffleUrgency(remainSec) {
+      const urgent = remainSec >= 1 && remainSec <= URGENT_SECONDS;
+      const shown = urgent ? remainSec : null;
+      if (shown === lastUrgentSec) return;
+      lastUrgentSec = shown;
+
+      shuffleAlertEl.classList.toggle("opacity-0", !urgent);
+      shuffleCountdownEl.style.color = urgent ? "#f87171" : "";
+      if (!urgent) return;
+
+      // level: 10초 남았을 때 0 → 1초 남았을 때 1
+      const level = (URGENT_SECONDS - remainSec) / (URGENT_SECONDS - 1);
+      const mix = (from, to) => Math.round(from + (to - from) * level);
+      const rgb = `${mix(217, 220)}, ${mix(119, 38)}, ${mix(6, 38)}`; // amber-600 → red-600
+
+      shuffleAlertBox.style.backgroundColor = `rgb(${rgb})`;
+      shuffleAlertBox.style.boxShadow = `0 0 ${Math.round(14 + level * 40)}px rgba(${rgb}, ${(0.45 + level * 0.5).toFixed(2)})`;
+      shuffleAlertBox.style.setProperty("--urgent-speed", `${(1 - level * 0.78).toFixed(2)}s`);
+      shuffleAlertBox.style.setProperty("--urgent-scale", (1.04 + level * 0.14).toFixed(2));
+      shuffleAlertBox.classList.toggle("is-final", remainSec <= 3);
+
+      shuffleAlertMsg.textContent = remainSec <= 3 ? "지금 바뀝니다!" : remainSec <= 6 ? "카드 순서가 곧 바뀝니다!" : "곧 카드 순서가 바뀝니다";
+      shuffleAlertSec.textContent = String(remainSec);
+      shuffleAlertSec.style.fontSize = `${(1.25 + level * 1.1).toFixed(2)}rem`;
+    }
+
+    // 초 단위 숫자가 건너뛰지 않도록 1초보다 짧은 간격으로 확인한다.
+    setInterval(tickShuffle, 250);
     // 백그라운드 탭에서는 타이머가 느려지므로, 다시 돌아왔을 때 바로 맞춘다.
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) tickShuffle();
