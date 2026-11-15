@@ -140,6 +140,12 @@
       </div>
     </section>
 
+    <!-- Shuffle Notice (5분마다 순서 랜덤 변경 안내) -->
+    <div id="shuffleNotice" class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 mb-4 px-4 py-3 rounded-xl bg-indigo-500/10 border border-indigo-400/25 text-xs sm:text-sm text-indigo-200">
+      <span class="font-bold">이 사이트는 5분마다 카드 순서가 랜덤으로 바뀝니다.</span>
+      <span class="text-indigo-300">다음 섞기까지 <strong id="shuffleCountdown" class="font-mono text-white">5:00</strong></span>
+    </div>
+
     <!-- Status & Export Bar -->
     <div class="flex flex-wrap items-center justify-between gap-3 mb-5 text-xs sm:text-sm text-zinc-400">
       <div>
@@ -1501,6 +1507,35 @@
     let pendingSubmission = null;
     let matchedDuplicateItem = null;
 
+    // 5분마다 카드 순서를 랜덤으로 섞기 위한 상태.
+    // 시계 기준 5분 구간(slot) 번호를 시드로 쓰기 때문에 같은 시각에 접속한 모든 사람이 같은 순서를 본다.
+    const SHUFFLE_INTERVAL_MS = 5 * 60 * 1000;
+    let currentShuffleSlot = Math.floor(Date.now() / SHUFFLE_INTERVAL_MS);
+
+    // 항목마다 (구간 번호 + 항목 ID)를 해시해 정렬 키를 만든다.
+    // 항목이 새로 추가돼도 나머지 항목들의 상대 순서는 그대로 유지된다.
+    function shuffleKey(item, slot) {
+      const str = `${slot}:${item.id || item.firebaseKey || item.ko}`;
+      let h = 2166136261;
+      for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      h ^= h >>> 16;
+      h = Math.imul(h, 0x85ebca6b);
+      h ^= h >>> 13;
+      h = Math.imul(h, 0xc2b2ae35);
+      h ^= h >>> 16;
+      return h >>> 0;
+    }
+
+    function shuffleForSlot(list, slot) {
+      return list
+        .map((item, idx) => ({ item, idx, key: shuffleKey(item, slot) }))
+        .sort((a, b) => a.key - b.key || a.idx - b.idx)
+        .map((entry) => entry.item);
+    }
+
     // 로컬 백업 불러오기
     function loadLocalBackup() {
       try {
@@ -1589,8 +1624,8 @@
         return bItem;
       });
 
-      // 커뮤니티 신규 항목을 상단에, 그다음 #001 귀찮니즘부터 순서대로 배치
-      return [...pureNewCommunity, ...mergedBase];
+      // 전체 항목을 현재 5분 구간의 랜덤 순서로 배치 (#번호는 현재 화면 순서 기준)
+      return shuffleForSlot([...pureNewCommunity, ...mergedBase], currentShuffleSlot);
     }
 
     function normalizeText(str) {
@@ -2055,8 +2090,33 @@
       document.getElementById("addForm").reset();
     });
 
+    // =========================================================================
+    // 11. 5분마다 순서 랜덤 변경 + 안내 알림
+    // =========================================================================
+    const shuffleCountdownEl = document.getElementById("shuffleCountdown");
+
+    function tickShuffle() {
+      const now = Date.now();
+      const slot = Math.floor(now / SHUFFLE_INTERVAL_MS);
+      if (slot !== currentShuffleSlot) {
+        currentShuffleSlot = slot;
+        renderCards();
+        showToast("5분이 지나 카드 순서가 랜덤으로 바뀌었습니다.");
+      }
+      const remainSec = Math.max(0, Math.ceil(((slot + 1) * SHUFFLE_INTERVAL_MS - now) / 1000));
+      shuffleCountdownEl.textContent = `${Math.floor(remainSec / 60)}:${String(remainSec % 60).padStart(2, "0")}`;
+    }
+
+    setInterval(tickShuffle, 1000);
+    // 백그라운드 탭에서는 타이머가 느려지므로, 다시 돌아왔을 때 바로 맞춘다.
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) tickShuffle();
+    });
+
     // 초기 렌더링
     renderCards();
+    tickShuffle();
+    showToast("이 사이트는 5분마다 카드 순서가 랜덤으로 바뀝니다.");
   </script>
 </body>
 </html>
