@@ -170,7 +170,7 @@
 
     <!-- Shuffle Notice (5분마다 순서 랜덤 변경 안내) -->
     <div id="shuffleNotice" class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 mb-4 px-4 py-3 rounded-xl bg-indigo-500/10 border border-indigo-400/25 text-xs sm:text-sm text-indigo-200">
-      <span class="font-bold">이 사이트는 5분마다 카드 순서가 랜덤으로 바뀝니다.</span>
+      <span class="font-bold">이 사이트는 5분마다 카드 순서가 랜덤으로 바뀝니다. <span class="font-medium text-indigo-300">새로 추가된 주의는 맨 위에 고정됩니다.</span></span>
       <span class="text-indigo-300">다음 섞기까지 <strong id="shuffleCountdown" class="font-mono text-white">5:00</strong></span>
     </div>
 
@@ -1585,6 +1585,7 @@
     // =========================================================================
     // 4. Firebase 실시간 리스너 연결 (onValue)
     // =========================================================================
+    let knownCommunityKeys = null; // 첫 스냅샷을 받기 전에는 null
     const cloudDot = document.getElementById("cloudDot");
     const cloudStatusText = document.getElementById("cloudStatusText");
     const cloudStatusBadge = document.getElementById("cloudStatusBadge");
@@ -1603,8 +1604,21 @@
           loaded.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
           communityItems = loaded;
           saveLocalBackup(loaded);
+
+          // 접속해 있는 동안 누군가 새 주의를 등록하면 실시간으로 알린다.
+          // (첫 스냅샷은 기존 목록이므로 알리지 않고, 기존 항목 수정본도 제외)
+          if (knownCommunityKeys) {
+            const added = loaded.filter((it) => !it.overridesBaseId && !knownCommunityKeys.has(it.firebaseKey));
+            if (added.length === 1) {
+              showToast(`'${added[0].ko}' 항목이 추가되었습니다.`);
+            } else if (added.length > 1) {
+              showToast(`새 주의 ${added.length}개가 추가되었습니다.`);
+            }
+          }
+          knownCommunityKeys = new Set(loaded.map((it) => it.firebaseKey));
         } else {
           communityItems = loadLocalBackup();
+          knownCommunityKeys = new Set();
         }
 
         cloudDot.className = "w-2 h-2 rounded-full bg-emerald-400";
@@ -1652,8 +1666,9 @@
         return bItem;
       });
 
-      // 전체 항목을 현재 5분 구간의 랜덤 순서로 배치 (#번호는 현재 화면 순서 기준)
-      return shuffleForSlot([...pureNewCommunity, ...mergedBase], currentShuffleSlot);
+      // 새로 추가된 커뮤니티 항목은 최신순으로 맨 위에 고정하고,
+      // 나머지 기본 항목만 현재 5분 구간의 랜덤 순서로 배치한다. (#번호는 현재 화면 순서 기준)
+      return [...pureNewCommunity, ...shuffleForSlot(mergedBase, currentShuffleSlot)];
     }
 
     function normalizeText(str) {
