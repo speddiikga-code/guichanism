@@ -170,7 +170,7 @@
 
     <!-- Shuffle Notice (5분마다 순서 랜덤 변경 안내) -->
     <div id="shuffleNotice" class="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 mb-4 px-4 py-3 rounded-xl bg-indigo-500/10 border border-indigo-400/25 text-xs sm:text-sm text-indigo-200">
-      <span class="font-bold">이 사이트는 5분마다 카드 순서가 랜덤으로 바뀝니다. <span class="font-medium text-indigo-300">새로 추가된 주의는 맨 위에 고정됩니다.</span></span>
+      <span class="font-bold">이 사이트는 5분마다 카드 순서가 랜덤으로 바뀝니다. <span class="font-medium text-indigo-300">가장 최근에 추가된 주의 1개만 맨 위에 고정되고, 겹치는 컬러는 서로 다르게 맞춰집니다.</span></span>
       <span class="text-indigo-300">다음 섞기까지 <strong id="shuffleCountdown" class="font-mono text-white">5:00</strong></span>
     </div>
 
@@ -1666,9 +1666,82 @@
         return bItem;
       });
 
-      // 새로 추가된 커뮤니티 항목은 최신순으로 맨 위에 고정하고,
-      // 나머지 기본 항목만 현재 5분 구간의 랜덤 순서로 배치한다. (#번호는 현재 화면 순서 기준)
-      return [...pureNewCommunity, ...shuffleForSlot(mergedBase, currentShuffleSlot)];
+      // 컬러가 겹치는 항목은 서로 다른 색이 되도록 보정한다.
+      // 기본 항목(원래 순서) → 커뮤니티 항목(오래된 순)으로 우선권을 줘서, 먼저 있던 항목이 원래 색을 유지한다.
+      const oldestFirstCommunity = [...pureNewCommunity].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+      const uniqueHexMap = buildUniqueHexMap([...mergedBase, ...oldestFirstCommunity]);
+      const withUniqueHex = (item) => {
+        const hex = uniqueHexMap.get(item);
+        return hex && hex !== item.hex ? { ...item, hex, originalHex: item.hex } : item;
+      };
+
+      // 맨 위 카드 1개(가장 최근에 추가된 주의, 없으면 #001 귀찮니즘)만 고정하고,
+      // 그 아래는 전부 현재 5분 구간의 랜덤 순서로 섞는다. (#번호는 현재 화면 순서 기준)
+      const everything = [...pureNewCommunity, ...mergedBase];
+      const pinned = everything[0];
+      const rest = shuffleForSlot(everything.slice(1), currentShuffleSlot);
+      return [pinned, ...rest].filter(Boolean).map(withUniqueHex);
+    }
+
+    // ---- 컬러 중복 제거 ----
+    function hexToHsl(hex) {
+      const r = parseInt(hex.slice(1, 3), 16) / 255;
+      const g = parseInt(hex.slice(3, 5), 16) / 255;
+      const b = parseInt(hex.slice(5, 7), 16) / 255;
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const l = (max + min) / 2;
+      const d = max - min;
+      let h = 0;
+      let s = 0;
+      if (d !== 0) {
+        s = d / (1 - Math.abs(2 * l - 1));
+        if (max === r) h = ((g - b) / d) % 6;
+        else if (max === g) h = (b - r) / d + 2;
+        else h = (r - g) / d + 4;
+        h *= 60;
+        if (h < 0) h += 360;
+      }
+      return [h, s, l];
+    }
+
+    function hslToHex(h, s, l) {
+      const c = (1 - Math.abs(2 * l - 1)) * s;
+      const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+      const m = l - c / 2;
+      const rgb = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+      return "#" + rgb.map((v) => Math.round((v + m) * 255).toString(16).padStart(2, "0")).join("").toUpperCase();
+    }
+
+    // 이미 쓰인 색이면 색상(hue)과 밝기를 조금씩 번갈아 옮겨 가며 아직 안 쓰인 가까운 색을 찾는다.
+    function findUnusedNearbyHex(hex, used) {
+      const [h, s, l] = hexToHsl(hex);
+      for (let step = 1; step <= 60; step++) {
+        const dir = step % 2 === 1 ? 1 : -1;
+        const amount = Math.ceil(step / 2);
+        const candidate = hslToHex(
+          (h + dir * amount * 8 + 720) % 360,
+          s,
+          Math.min(0.85, Math.max(0.15, l + dir * amount * 0.04))
+        );
+        if (!used.has(candidate)) return candidate;
+      }
+      return hex;
+    }
+
+    // 항목 → 겹치지 않는 컬러 맵. 앞에 있는 항목이 원래 색을 유지하고, 뒤에 나온 중복 항목의 색이 바뀐다.
+    function buildUniqueHexMap(itemsInPriorityOrder) {
+      const used = new Set();
+      const map = new Map();
+      itemsInPriorityOrder.forEach((item) => {
+        const valid = /^#[0-9a-f]{6}$/i.test(item.hex || "");
+        if (!valid) return; // 형식이 다른 색은 건드리지 않는다
+        let hex = item.hex.toUpperCase();
+        if (used.has(hex)) hex = findUnusedNearbyHex(hex, used);
+        used.add(hex);
+        map.set(item, hex);
+      });
+      return map;
     }
 
     function normalizeText(str) {
